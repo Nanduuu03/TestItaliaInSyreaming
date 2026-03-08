@@ -15,6 +15,7 @@ include(
     "CorsaroNero",
 //    "DaddyLive",
     "Huhu",
+    "IlGenioDelloStreaming",
 //    "OnlineSerieTV",
     "StreamingCommunity",
     "Stremio",
