@@ -31,17 +31,17 @@ Clicca sull'immagine per installare la repo oppure vai in *Impostazioni* -> *Est
 **Stremio – Guida**
 Spiegazione dettagliata di StremioX (addon di streaming) e StremioC (addon catalogo).
 
-[Apri Guida →](https://github.com/DieGon7771/ItaliaInStreaming/blob/master/README_Stremio.md)
+[Apri Guida →](https://github.com/DieGon7771/ItaliaInStreaming/blob/master/guide/README_Stremio.md)
 
 **SyncStream – Guida** 
 Spiegazione dettagliata di Cross Device Sync (sincronizzazione dispositivi).
 
-[Apri Guida →](https://github.com/DieGon7771/ItaliaInStreaming/blob/master/README_SyncStream.md)
+[Apri Guida →](https://github.com/DieGon7771/ItaliaInStreaming/blob/master/guide/README_SyncStream.md)
 
 **SectionOrganizer – Guida** 
 Spiegazione dettagliata della homepage personalizzata (configurazione home).
 
-[Apri Guida →](https://github.com/DieGon7771/ItaliaInStreaming/blob/master/README_SectionOrganizer.md)
+[Apri Guida →](https://github.com/DieGon7771/ItaliaInStreaming/blob/master/guide/README_SectionOrganizer.md)
 
 ## 🔀 Crediti
 • **La maggior parte dei plugin** sono stati forkati da: [doGiorsHadEnough](https://github.com/doGior/doGiorsHadEnough) 

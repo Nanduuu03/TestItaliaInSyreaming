@@ -2,14 +2,13 @@ dependencies {
     implementation("com.google.android.material:material:1.13.0")
 }
 
-version = 1
+version = 2
 
 cloudstream {
     description = "Organizza homepage tra vari plugin"
     authors = listOf("RowdyRushya, Phisher98, DieGon") 
-    status = 0
+    status = 3
     tvTypes = listOf("All")
     requiresResources = true
-    language = "it"
     iconUrl = "https://raw.githubusercontent.com/DieGon7771/ItaliaInStreaming/master/SectionOrganizer/SectionOrganizer_icon.png"
 }
