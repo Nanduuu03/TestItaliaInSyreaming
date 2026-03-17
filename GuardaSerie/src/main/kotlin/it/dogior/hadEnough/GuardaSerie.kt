@@ -1,6 +1,5 @@
 package it.dogior.hadEnough
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.LoadResponse.Companion.addScore
@@ -11,7 +10,6 @@ import com.lagradost.cloudstream3.utils.loadExtractor
 import it.dogior.hadEnough.extractors.DroploadExtractor
 import it.dogior.hadEnough.extractors.SupervideoExtractor
 import org.jsoup.nodes.Document
-import org.jsoup.nodes.Element
 
 class GuardaSerie : MainAPI() {
     override var mainUrl = "https://guarda-serie.click"
@@ -79,22 +77,35 @@ class GuardaSerie : MainAPI() {
             .replace("/thumb/", "/posts/")
     }
 
+    private fun cleanTitle(rawTitle: String): String {
+        return rawTitle.replace(Regex("\\(\\d{4}\\)"), "").trim()
+    }
+
+    private fun cleanPlot(rawPlot: String): String {
+        return rawPlot.replace("Trama Completa!", "", ignoreCase = true).trim()
+    }
+
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = if (request.data == mainUrl) {
+        // Costruisci URL con paginazione
+        val baseUrl = if (request.data == mainUrl) {
             mainUrl
         } else {
-            request.data
+            if (page > 1) {
+                request.data.removeSuffix("/") + "/page/$page/"
+            } else {
+                request.data
+            }
         }
         
-        val doc = app.get(url).document
+        val doc = app.get(baseUrl).document
         val items = mutableListOf<SearchResponse>()
         
         if (request.data == mainUrl) {
+            // Homepage: slider
             items.addAll(doc.select(".slider .item").mapNotNull { element ->
                 val link = element.select("a").attr("href")
-                val title = element.select("img").attr("alt")
-                val thumbUrl = element.select("img").attr("src")
-                val poster = getOriginalPoster(thumbUrl)
+                val title = cleanTitle(element.select("img").attr("alt"))
+                val poster = getOriginalPoster(element.select("img").attr("src"))
                 
                 if (link.isNotEmpty() && title.isNotEmpty()) {
                     newTvSeriesSearchResponse(title, fixUrl(link)) {
@@ -104,14 +115,12 @@ class GuardaSerie : MainAPI() {
                     }
                 } else null
             })
-        }
-        
-        if (request.data != mainUrl) {
+        } else {
+            // Sezioni con paginazione
             items.addAll(doc.select(".mlnew").mapNotNull { element ->
                 val link = element.select(".mlnh-thumb a").attr("href")
-                val title = element.select("h2 a").text()
-                val thumbUrl = element.select("img").attr("src")
-                val poster = getOriginalPoster(thumbUrl)
+                val title = cleanTitle(element.select("h2 a").text())
+                val poster = getOriginalPoster(element.select("img").attr("src"))
                 
                 if (link.isNotEmpty() && title.isNotEmpty()) {
                     newTvSeriesSearchResponse(title, fixUrl(link)) {
@@ -123,10 +132,11 @@ class GuardaSerie : MainAPI() {
             })
         }
         
-        val hasNext = doc.select(".pagenavi a:contains(Next)").isNotEmpty()
+        // Verifica se esiste una pagina successiva
+        val hasNext = doc.select(".pagenavi a:contains(Next), .pagenavi a:contains(»)").isNotEmpty()
         
         return newHomePageResponse(
-            HomePageList(request.name, items, isHorizontalImages = false),
+            listOf(HomePageList(request.name, items, isHorizontalImages = false)),
             hasNext = hasNext
         )
     }
@@ -143,9 +153,8 @@ class GuardaSerie : MainAPI() {
         
         return doc.select(".mlnew").mapNotNull { element ->
             val link = element.select(".mlnh-thumb a").attr("href")
-            val title = element.select("h2 a").text()
-            val thumbUrl = element.select("img").attr("src")
-            val poster = getOriginalPoster(thumbUrl)
+            val title = cleanTitle(element.select("h2 a").text())
+            val poster = getOriginalPoster(element.select("img").attr("src"))
             
             if (link.isNotEmpty() && title.isNotEmpty()) {
                 newTvSeriesSearchResponse(title, fixUrl(link)) {
@@ -159,19 +168,19 @@ class GuardaSerie : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val doc = app.get(url).document
         
-        val title = doc.select("h1.front_title, .front_title").text()
-            .replace("streaming", "")
-            .trim()
+        val title = cleanTitle(
+            doc.select("h1.front_title, .front_title").text()
+                .replace("streaming", "")
+                .trim()
+        )
+        
         val poster = doc.select("#cover, .poster img, .tv_info_right img").attr("src")
         
-        val plot = doc.select(".tv_info_right").text()
-            .substringAfter("Trama")
-            .substringBefore("!")
-            .replace("trama completa", "")
-            .replace("Trama completa", "")
-            .replace("clicca qui", "")
-            .replace(Regex("\\s+"), " ")
-            .trim()
+        val plot = cleanPlot(
+            doc.select(".tv_info_right").text()
+                .substringAfter("Trama")
+                .substringBefore("!")
+        )
         
         val ratingText = doc.select(".post-ratings .rating-value, .entry-imdb").text()
             .replace("IMDb", "")
