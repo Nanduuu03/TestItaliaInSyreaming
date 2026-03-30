@@ -11,7 +11,7 @@ def send_telegram_message(bot_token, chat_id, message, parse_mode='HTML'):
         'chat_id': chat_id,
         'text': message,
         'parse_mode': parse_mode,
-        'disable_web_page_preview': False
+        'disable_web_page_preview': True
     }
     
     try:
