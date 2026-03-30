@@ -2,7 +2,7 @@ name: Plugin Status Bot
 on:
 #  schedule:
 #    - cron: '0 9 */3 * *'
-#  workflow_dispatch:
+  workflow_dispatch:
 
 jobs:
   send-report:
