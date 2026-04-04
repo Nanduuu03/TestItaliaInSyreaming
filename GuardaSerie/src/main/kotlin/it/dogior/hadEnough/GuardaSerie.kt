@@ -57,7 +57,6 @@ class GuardaSerie : MainAPI() {
         val items = mutableListOf<SearchResponse>()
         
         when {
-            // Home page - slider "I titoli del momento"
             url == "$mainUrl/" -> {
                 doc.select(".slider-item").forEach { element ->
                     val link = element.select("a").first()?.attr("href") ?: return@forEach
@@ -74,9 +73,7 @@ class GuardaSerie : MainAPI() {
                 }
             }
             
-            // Archive con classifica (Top IMDB, generi)
             url.contains("/archive") -> {
-                // Lista classifica (#ranked-list)
                 doc.select("#ranked-list ul li a.ranked-link").forEach { element ->
                     val link = element.attr("href")
                     val title = element.select(".rank-name").text()
@@ -90,7 +87,6 @@ class GuardaSerie : MainAPI() {
                     }
                 }
                 
-                // Lista normale (.mlnew)
                 doc.select(".mlnew").forEach { element ->
                     val link = element.select(".mlnh-thumb a").attr("href")
                     val title = element.select(".mlnh-2 h2 a").text()
@@ -120,7 +116,6 @@ class GuardaSerie : MainAPI() {
         
         val results = mutableListOf<SearchResponse>()
         
-        // Cerca nella classifica
         doc.select("#ranked-list ul li a.ranked-link").forEach { element ->
             val link = element.attr("href")
             val title = element.select(".rank-name").text()
@@ -134,7 +129,6 @@ class GuardaSerie : MainAPI() {
             }
         }
         
-        // Cerca nella lista normale
         doc.select(".mlnew").forEach { element ->
             val link = element.select(".mlnh-thumb a").attr("href")
             val title = element.select(".mlnh-2 h2 a").text()
@@ -155,37 +149,28 @@ class GuardaSerie : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val doc = app.get(url).document
         
-        // Titolo
         val title = doc.select("h1.front-title, .gs-detail-title").text()
             .replace("streaming", "")
             .trim()
         
-        // Poster
         val poster = getImageUrl(doc.select("#tv-info-poster img").attr("src"))
         
-        // Trama
         val plot = doc.select(".tv-info-right").text()
             .substringAfter("Trama")
             .substringBefore("Categoria")
             .trim()
         
-        // Rating
         val ratingText = doc.select(".entry-imdb").text().replace("★", "").trim()
         
-        // Anno
         val yearText = doc.select(".tv-info-list ul:contains(Anno) li:last-child").text()
         val year = Regex("\\d{4}").find(yearText)?.value?.toIntOrNull()
         
-        // Generi
         val genres = doc.select(".tv-info-list ul:contains(Categoria) li:last-child a").map { it.text() }
         
-        // Stato
         val status = if (yearText.contains("Returning Series")) ShowStatus.Ongoing else ShowStatus.Completed
         
-        // Estrai TMDB ID dall'URL o dalla pagina
         val tmdbId = extractTmdbId(url, doc)
         
-        // Episodi
         val episodes = getEpisodes(doc, poster, tmdbId)
         
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
@@ -199,13 +184,11 @@ class GuardaSerie : MainAPI() {
     }
     
     private fun extractTmdbId(url: String, doc: Document): String {
-        // Metodo 1: Dall'URL della pagina (formato /detail/tv-{ID}-nome-serie)
         val urlMatch = Regex("""/detail/tv-(\d+)""").find(url)
         if (urlMatch != null) {
             return urlMatch.groupValues[1]
         }
         
-        // Metodo 2: Dallo script della pagina (var tmdbID)
         val scripts = doc.select("script")
         for (script in scripts) {
             val data = script.data()
@@ -215,14 +198,12 @@ class GuardaSerie : MainAPI() {
             }
         }
         
-        // Metodo 3: Dai meta tag
         val metaMatch = doc.select("meta[property=og:url]").attr("content")
         val metaId = Regex("""tv-(\d+)""").find(metaMatch)
         if (metaId != null) {
             return metaId.groupValues[1]
         }
         
-        // Metodo 4: Dai link canonici
         val canonicalMatch = doc.select("link[rel=canonical]").attr("href")
         val canonicalId = Regex("""tv-(\d+)""").find(canonicalMatch)
         if (canonicalId != null) {
@@ -235,7 +216,6 @@ class GuardaSerie : MainAPI() {
     private fun getEpisodes(doc: Document, poster: String?, tmdbId: String): List<Episode> {
         val episodes = mutableListOf<Episode>()
         
-        // Cerca i tab delle stagioni
         val seasonTabs = doc.select(".tt-season ul li a")
         
         if (seasonTabs.isNotEmpty()) {
@@ -250,7 +230,6 @@ class GuardaSerie : MainAPI() {
                         ?: episodeLink?.text()?.toIntOrNull()
                         ?: continue
                     
-                    // Estrai titolo e descrizione dall'attributo data-title
                     val dataTitle = episodeLink?.attr("data-title")?.trim() ?: ""
                     var episodeTitle = "Episodio $episodeNum"
                     var episodeDescription: String? = null
@@ -265,7 +244,6 @@ class GuardaSerie : MainAPI() {
                         }
                     }
                     
-                    // Costruisci l'URL del player con il TMDB ID corretto
                     val playerUrl = "https://vixsrc.to/tv/$tmdbId/$seasonNumber/$episodeNum?lang=it"
                     
                     val mirrors = listOf(MirrorLink("VixSrc", playerUrl))
