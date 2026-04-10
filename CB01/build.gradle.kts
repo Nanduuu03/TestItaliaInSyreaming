@@ -1,12 +1,12 @@
 // use an integer for version numbers
-version = 24
+version = 25
 
 
 cloudstream {
     // All of these properties are optional, you can safely remove them
 
     description = "Film e SerieTV da CB01"
-    authors = listOf("doGior","DieGon")
+    authors = listOf("doGior","Bbshak","DieGon")
 
     /**
     * Status int as the following:
@@ -15,7 +15,7 @@ cloudstream {
     * 2: Slow
     * 3: Beta only
     * */
-    status = 0
+    status = 1
 
     tvTypes = listOf("Movie", "TvSeries", "Cartoon")
 
