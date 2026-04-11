@@ -1,13 +1,24 @@
 package it.dogior.hadEnough.extractors
 
+import android.annotation.SuppressLint
+import android.app.Application
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import java.util.regex.Pattern
+import kotlinx.coroutines.suspendCancellableCoroutine
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
 
 class MixDropExtractor : ExtractorApi() {
     override val name = "MixDrop"
@@ -16,6 +27,37 @@ class MixDropExtractor : ExtractorApi() {
 
     companion object {
         private const val TAG = "MixDropExtractor"
+        private const val TIMEOUT_SECONDS = 30L
+        
+        private fun getApplicationContext(): android.content.Context? {
+            return try {
+                val activityThreadClass = Class.forName("android.app.ActivityThread")
+                val currentActivityThreadMethod = activityThreadClass.getMethod("currentActivityThread")
+                val activityThread = currentActivityThreadMethod.invoke(null)
+                val getApplicationMethod = activityThreadClass.getMethod("getApplication")
+                getApplicationMethod.invoke(activityThread) as? Application
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to get Application context: ${e.message}")
+                null
+            }
+        }
+        
+        private val IGNORED_EXTENSIONS = listOf(
+            ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".ico",
+            ".css", ".woff", ".woff2", ".ttf", ".eot",
+            ".js", ".json", ".xml", ".txt"
+        )
+        
+        private val VIDEO_KEYWORDS = listOf(
+            ".mp4", ".m3u8", ".ts", ".mkv", ".webm",
+            "video", "stream", "delivery", "v2/", "playlist"
+        )
+        
+        private fun isVideoUrl(url: String): Boolean {
+            val lowerUrl = url.lowercase()
+            if (IGNORED_EXTENSIONS.any { lowerUrl.contains(it) }) return false
+            return VIDEO_KEYWORDS.any { lowerUrl.contains(it) }
+        }
     }
 
     override suspend fun getUrl(
@@ -24,139 +66,106 @@ class MixDropExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
     ) {
-        Log.d(TAG, "Getting video from: $url")
+        val videoId = url.substringAfterLast("/").trim()
+        val embedUrl = "https://mixdrop.top/e/$videoId"
         
-        try {
-            val videoId = url.substringAfterLast("/")
-            Log.d(TAG, "Video ID: $videoId")
-            
-            val pageUrl = "https://mixdrop.top/e/$videoId"
-            Log.d(TAG, "Fetching page: $pageUrl")
-            
-            val pageHeaders = mapOf(
-                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-                "Referer" to "https://m1xdrop.net/"
+        val videoUrl = extractWithWebView(embedUrl)
+        
+        if (videoUrl != null) {
+            callback.invoke(
+                newExtractorLink(
+                    source = name,
+                    name = "MixDrop",
+                    url = videoUrl,
+                    type = ExtractorLinkType.VIDEO
+                ) {
+                    this.headers = mapOf(
+                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+                    )
+                    this.referer = "https://mixdrop.top/"
+                }
             )
-            
-            val pageResponse = app.get(pageUrl, headers = pageHeaders)
-            val html = pageResponse.body.string()
-            
-            val videoUrl = extractVideoUrlFromHtml(html)
-            
-            if (videoUrl != null) {
-                Log.d(TAG, "Video URL extracted: $videoUrl")
-                
-                val videoHeaders = mapOf(
-                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-                    "Referer" to "https://m1xdrop.net/"
-                )
-                
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = "MixDrop",
-                        url = videoUrl,
-                        type = ExtractorLinkType.VIDEO
-                    ) {
-                        this.headers = videoHeaders
-                        this.referer = "https://m1xdrop.net/"
-                    }
-                )
-            } else {
-                Log.e(TAG, "Failed to extract video URL from HTML")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error: ${e.message}")
-            e.printStackTrace()
         }
     }
     
-    private fun extractVideoUrlFromHtml(html: String): String? {
-        try {
-            // 1. Prima cerca il pattern MDCore (il più affidabile)
-            val mdcoreRegex = Regex("""MDCore\.[a-zA-Z0-9]+\s*=\s*["'](//[^"']+\.mp4[^"']*)["']""")
-            val mdcoreMatch = mdcoreRegex.find(html)
-            if (mdcoreMatch != null) {
-                var videoUrl = mdcoreMatch.groupValues[1]
-                if (videoUrl.startsWith("//")) videoUrl = "https:$videoUrl"
-                Log.d(TAG, "Found MDCore URL: $videoUrl")
-                return videoUrl
-            }
+    private suspend fun extractWithWebView(embedUrl: String): String? {
+        return suspendCancellableCoroutine { continuation ->
+            val latch = CountDownLatch(1)
+            var extractedUrl: String? = null
             
-            // 2. Pattern standard con URL completo
-            val urlPattern = Regex("""(https?://[a-z0-9]+\.mxcontent\.net/v2/[a-f0-9]+\.mp4\?s=[^&]+&e=[^&]+&_t=[^&"]+)""")
-            val urlMatch = urlPattern.find(html)
-            if (urlMatch != null) {
-                var videoUrl = urlMatch.groupValues[1]
-                videoUrl = videoUrl.replace(Regex("[\\s\\n\\r]"), "")
-                Log.d(TAG, "Found direct URL: $videoUrl")
-                return videoUrl
-            }
-            
-            // 3. Cerca il pattern packer (eval) e de-offusca
-            val evalPattern = Pattern.compile(
-                """\}\('(.*?)',\d+,\d+,'(.*?)'\.split\('\|'\)""",
-                Pattern.DOTALL
-            )
-            val matcher = evalPattern.matcher(html)
-            
-            if (matcher.find()) {
-                val payload = matcher.group(1)
-                val wordsStr = matcher.group(2)
-                val words = wordsStr.split("|")
-                
-                val resolved = StringBuilder()
-                var i = 0
-                while (i < payload.length) {
-                    if (payload[i].isDigit()) {
-                        var numStr = ""
-                        while (i < payload.length && payload[i].isDigit()) {
-                            numStr += payload[i]
-                            i++
-                        }
-                        val idx = numStr.toIntOrNull()
-                        if (idx != null && idx < words.size) {
-                            resolved.append(words[idx])
-                        } else {
-                            resolved.append(numStr)
-                        }
-                    } else {
-                        resolved.append(payload[i])
-                        i++
+            Handler(Looper.getMainLooper()).post {
+                try {
+                    val context = getApplicationContext() ?: run {
+                        continuation.resume(null)
+                        return@post
                     }
-                }
-                
-                val unpacked = resolved.toString()
-                
-                // Cerca MDCore anche nel codice de-offuscato
-                val mdcoreInUnpacked = Regex("""MDCore\.[a-zA-Z0-9]+\s*=\s*["'](//[^"']+\.mp4[^"']*)["']""").find(unpacked)
-                if (mdcoreInUnpacked != null) {
-                    var videoUrl = mdcoreInUnpacked.groupValues[1]
-                    if (videoUrl.startsWith("//")) videoUrl = "https:$videoUrl"
-                    Log.d(TAG, "Found MDCore URL in unpacked: $videoUrl")
-                    return videoUrl
-                }
-                
-                // Pattern standard nel codice de-offuscato
-                val vserverEval = Regex("""vserver\s*=\s*"([^"]+)"""").find(unpacked)?.groupValues?.get(1)?.trim()
-                var vfileEval = Regex("""vfile\s*=\s*"([^"]+)"""").find(unpacked)?.groupValues?.get(1)?.trim()
-                val tokenSEval = Regex("""s\s*=\s*([^&\s"]+)""").find(unpacked)?.groupValues?.get(1)?.trim()
-                val tokenEEval = Regex("""e\s*=\s*([^&\s"]+)""").find(unpacked)?.groupValues?.get(1)?.trim()
-                val tokenTEval = Regex("""_t\s*=\s*([^&\s"]+)""").find(unpacked)?.groupValues?.get(1)?.trim()
-                
-                if (!vserverEval.isNullOrEmpty() && !vfileEval.isNullOrEmpty() && 
-                    !tokenSEval.isNullOrEmpty() && !tokenEEval.isNullOrEmpty() && !tokenTEval.isNullOrEmpty()) {
                     
-                    vfileEval = vfileEval.replace(Regex("\\.mp4$"), "")
+                    @SuppressLint("SetJavaScriptEnabled")
+                    val webView = WebView(context)
                     
-                    return "https://${vserverEval}.mxcontent.net/v2/${vfileEval}.mp4?s=$tokenSEval&e=$tokenEEval&_t=$tokenTEval"
+                    webView.settings.apply {
+                        javaScriptEnabled = true
+                        domStorageEnabled = true
+                        blockNetworkImage = true
+                        javaScriptCanOpenWindowsAutomatically = true
+                        mediaPlaybackRequiresUserGesture = false
+                        userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+                    }
+                    
+                    var found = false
+                    
+                    webView.webViewClient = object : WebViewClient() {
+                        override fun shouldInterceptRequest(
+                            view: WebView?,
+                            request: WebResourceRequest?
+                        ): WebResourceResponse? {
+                            val requestUrl = request?.url.toString()
+                            
+                            if (!found && isVideoUrl(requestUrl)) {
+                                found = true
+                                extractedUrl = requestUrl
+                                
+                                Handler(Looper.getMainLooper()).post {
+                                    webView.stopLoading()
+                                    webView.destroy()
+                                    latch.countDown()
+                                    continuation.resume(requestUrl)
+                                }
+                                return null
+                            }
+                            
+                            return super.shouldInterceptRequest(view, request)
+                        }
+                        
+                        override fun onPageFinished(view: WebView?, url: String?) {
+                            super.onPageFinished(view, url)
+                            
+                            view?.evaluateJavascript("""
+                                (function() {
+                                    document.querySelectorAll('video').forEach(v => { v.muted = true; v.play(); });
+                                    document.querySelector('[class*="play"]')?.click();
+                                })();
+                            """.trimIndent(), null)
+                        }
+                    }
+                    
+                    webView.loadUrl(embedUrl)
+                    
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        if (!found) {
+                            webView.stopLoading()
+                            webView.destroy()
+                            latch.countDown()
+                            continuation.resume(null)
+                        }
+                    }, TimeUnit.SECONDS.toMillis(TIMEOUT_SECONDS))
+                    
+                } catch (e: Exception) {
+                    continuation.resume(null)
                 }
             }
             
-        } catch (e: Exception) {
-            Log.e(TAG, "Extraction error: ${e.message}")
+            latch.await(TIMEOUT_SECONDS + 5, TimeUnit.SECONDS)
         }
-        return null
     }
 }
-                                      
