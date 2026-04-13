@@ -108,6 +108,29 @@ class StreamingCommunity(
         return this.toJson().toRequestBody("application/json;charset=utf-8".toMediaType())
     }
 
+    private suspend fun fetchSliderSectionsInBatches(): List<HomePageList> {
+        val maxSlidersPerRequest = 6
+        val allSections = mutableListOf<HomePageList>()
+
+        sliderFetchRequestBody.sliders
+            .chunked(maxSlidersPerRequest)
+            .forEachIndexed { index, sliderBatch ->
+                val response = app.post(
+                    "${Companion.mainUrl}api/sliders/fetch?lang=$lang",
+                    requestBody = SliderFetchRequestBody(sliderBatch).toRequestBody(),
+                    headers = getSliderFetchHeaders()
+                )
+
+                val payload = response.body.string()
+                Log.d(TAG, "Slider fetch batch=${index + 1} status=${response.code} size=${sliderBatch.size}")
+                Log.d(TAG, "Slider fetch batch=${index + 1} preview=${payload.take(500)}")
+
+                allSections += parseSliderFetchSections(payload)
+            }
+
+        return allSections
+    }
+
     private fun isHtmlPayload(payload: String): Boolean {
         val trimmed = payload.trimStart()
         return trimmed.startsWith("<") || trimmed.contains("<!DOCTYPE", ignoreCase = true)
@@ -263,16 +286,7 @@ class StreamingCommunity(
             setupHeaders()
         }
 
-        val lazyResponse = app.post(
-            "${Companion.mainUrl}api/sliders/fetch?lang=$lang",
-            requestBody = sliderFetchRequestBody.toRequestBody(),
-            headers = getSliderFetchHeaders()
-        )
-        val lazyPayload = lazyResponse.body.string()
-        Log.d(TAG, "Slider fetch status=${lazyResponse.code}")
-        Log.d(TAG, "Slider fetch preview=${lazyPayload.take(500)}")
-
-        val lazySections = parseSliderFetchSections(lazyPayload)
+        val lazySections = fetchSliderSectionsInBatches()
         if (lazySections.isEmpty()) {
             Log.d(TAG, "Lazy slider fetch returned no sections")
         }
