@@ -32,6 +32,8 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.json.JSONObject
 import org.jsoup.parser.Parser
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
 
 class StreamingCommunity(
     override var lang: String = "it",
@@ -45,6 +47,7 @@ class StreamingCommunity(
 
     companion object {
         private var inertiaVersion = ""
+        private var decodedXsrfToken = ""
         private val headers = mapOf(
             "Cookie" to "",
             "X-Inertia" to true.toString(),
@@ -156,8 +159,23 @@ class StreamingCommunity(
 
     private suspend fun setupHeaders() {
         val response = app.get("$mainUrl/archive")
-        val cookies = response.cookies
-        headers["Cookie"] = cookies.map { it.key + "=" + it.value }.joinToString(separator = "; ")
+        val cookieJar = linkedMapOf<String, String>()
+        response.cookies.forEach { cookieJar[it.key] = it.value }
+
+        val csrfResponse = app.get(
+            "${Companion.mainUrl}sanctum/csrf-cookie",
+            headers = mapOf(
+                "Referer" to "$mainUrl/",
+                "X-Requested-With" to "XMLHttpRequest"
+            )
+        )
+        csrfResponse.cookies.forEach { cookieJar[it.key] = it.value }
+
+        headers["Cookie"] = cookieJar.entries.joinToString("; ") { "${it.key}=${it.value}" }
+        decodedXsrfToken = cookieJar["XSRF-TOKEN"]
+            ?.let { URLDecoder.decode(it, StandardCharsets.UTF_8.name()) }
+            ?: ""
+
         val page = response.document
         val inertiaPageObject = page.select("#app").attr("data-page")
         inertiaVersion = inertiaPageObject
@@ -170,6 +188,7 @@ class StreamingCommunity(
         return mapOf(
             "Cookie" to (headers["Cookie"] ?: ""),
             "X-Requested-With" to "XMLHttpRequest",
+            "X-XSRF-TOKEN" to decodedXsrfToken,
             "Referer" to "$mainUrl/",
             "Accept" to "application/json, text/plain, */*",
             "Origin" to Companion.mainUrl.removeSuffix("/")
