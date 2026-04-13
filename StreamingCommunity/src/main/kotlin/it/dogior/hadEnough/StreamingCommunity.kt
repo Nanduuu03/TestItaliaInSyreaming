@@ -30,6 +30,9 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import org.jsoup.parser.Parser
 import java.net.URLDecoder
@@ -68,6 +71,42 @@ class StreamingCommunity(
     )
 
     override val mainPage = mainPageOf("home" to "Home")
+
+    private data class SliderFetchRequestSlider(
+        val name: String,
+        val genre: String?
+    )
+
+    private data class SliderFetchRequestBody(
+        val sliders: List<SliderFetchRequestSlider>
+    )
+
+    private val sliderFetchRequestBody = SliderFetchRequestBody(
+        sliders = listOf(
+            SliderFetchRequestSlider(name = "top10", genre = null),
+            SliderFetchRequestSlider(name = "trending", genre = null),
+            SliderFetchRequestSlider(name = "latest", genre = null),
+            SliderFetchRequestSlider(name = "upcoming", genre = null),
+            SliderFetchRequestSlider(name = "genre", genre = "Animation"),
+            SliderFetchRequestSlider(name = "genre", genre = "Adventure"),
+            SliderFetchRequestSlider(name = "genre", genre = "Action"),
+            SliderFetchRequestSlider(name = "genre", genre = "Comedy"),
+            SliderFetchRequestSlider(name = "genre", genre = "Crime"),
+            SliderFetchRequestSlider(name = "genre", genre = "Documentary"),
+            SliderFetchRequestSlider(name = "genre", genre = "Drama"),
+            SliderFetchRequestSlider(name = "genre", genre = "Family"),
+            SliderFetchRequestSlider(name = "genre", genre = "Science Fiction"),
+            SliderFetchRequestSlider(name = "genre", genre = "Fantasy"),
+            SliderFetchRequestSlider(name = "genre", genre = "Horror"),
+            SliderFetchRequestSlider(name = "genre", genre = "Reality"),
+            SliderFetchRequestSlider(name = "genre", genre = "Romance"),
+            SliderFetchRequestSlider(name = "genre", genre = "Thriller")
+        )
+    )
+
+    private fun SliderFetchRequestBody.toRequestBody(): RequestBody {
+        return this.toJson().toRequestBody("application/json;charset=utf-8".toMediaType())
+    }
 
     private fun isHtmlPayload(payload: String): Boolean {
         val trimmed = payload.trimStart()
@@ -191,6 +230,7 @@ class StreamingCommunity(
             "X-XSRF-TOKEN" to decodedXsrfToken,
             "Referer" to "$mainUrl/",
             "Accept" to "application/json, text/plain, */*",
+            "Content-Type" to "application/json",
             "Origin" to Companion.mainUrl.removeSuffix("/")
         )
     }
@@ -219,16 +259,13 @@ class StreamingCommunity(
             return newHomePageResponse(emptyList(), hasNext = false)
         }
 
-        val homePayload = app.get("$mainUrl/").body.string()
-        val homepageSections = parseHomeSections(homePayload)
-
         if (headers["Cookie"].isNullOrEmpty()) {
             setupHeaders()
         }
 
         val lazyResponse = app.post(
-            "${Companion.mainUrl}api/sliders/fetch",
-            data = mapOf("lang" to lang),
+            "${Companion.mainUrl}api/sliders/fetch?lang=$lang",
+            requestBody = sliderFetchRequestBody.toRequestBody(),
             headers = getSliderFetchHeaders()
         )
         val lazyPayload = lazyResponse.body.string()
@@ -240,7 +277,7 @@ class StreamingCommunity(
             Log.d(TAG, "Lazy slider fetch returned no sections")
         }
 
-        return newHomePageResponse(homepageSections + lazySections, hasNext = false)
+        return newHomePageResponse(lazySections, hasNext = false)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
