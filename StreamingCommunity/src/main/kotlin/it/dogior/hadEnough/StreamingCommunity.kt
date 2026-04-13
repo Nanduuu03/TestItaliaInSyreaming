@@ -158,6 +158,16 @@ class StreamingCommunity(
         headers["X-Inertia-Version"] = inertiaVersion
     }
 
+    private fun getSliderFetchHeaders(): Map<String, String> {
+        return mapOf(
+            "Cookie" to (headers["Cookie"] ?: ""),
+            "X-Requested-With" to "XMLHttpRequest",
+            "Referer" to "$mainUrl/",
+            "Accept" to "application/json, text/plain, */*",
+            "Origin" to Companion.mainUrl.removeSuffix("/")
+        )
+    }
+
     private fun searchResponseBuilder(listJson: List<Title>): List<SearchResponse> {
         val domain = mainUrl.substringAfter("://").substringBeforeLast("/")
         val list: List<SearchResponse> =
@@ -182,18 +192,23 @@ class StreamingCommunity(
             return newHomePageResponse(emptyList(), hasNext = false)
         }
 
-        val homePayload = app.get(Companion.mainUrl).body.string()
+        val homePayload = app.get("$mainUrl/").body.string()
         val homepageSections = parseHomeSections(homePayload)
 
         if (headers["Cookie"].isNullOrEmpty()) {
             setupHeaders()
         }
 
-        val lazyPayload = app.get(
+        val lazyResponse = app.get(
             "${Companion.mainUrl}api/sliders/fetch",
             params = mapOf("lang" to lang),
-            headers = headers
-        ).body.string()
+            headers = getSliderFetchHeaders()
+        )
+        val lazyPayload = lazyResponse.body.string()
+        Log.d(TAG, "Slider fetch status=${lazyResponse.code}")
+        Log.d(TAG, "Slider fetch contentType=${lazyResponse.headers[\"Content-Type\"]}")
+        Log.d(TAG, "Slider fetch preview=${lazyPayload.take(500)}")
+
         val lazySections = parseSliderFetchSections(lazyPayload)
         if (lazySections.isEmpty()) {
             Log.w(TAG, "Lazy slider fetch returned no sections")
