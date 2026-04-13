@@ -64,26 +64,7 @@ class StreamingCommunity(
         "Accept" to "application/json"
     )
 
-    // TODO: verify genre IDs against live backend payload and replace fallback IDs if needed.
-    private val fallbackGenreSections = listOf(
-        "genre:28" to if (lang == "it") "Azione" else "Action",
-        "genre:12" to if (lang == "it") "Avventura" else "Adventure",
-        "genre:16" to if (lang == "it") "Animazione" else "Animation",
-        "genre:35" to if (lang == "it") "Commedia" else "Comedy",
-        "genre:80" to if (lang == "it") "Crime" else "Crime",
-        "genre:99" to if (lang == "it") "Documentario" else "Documentary",
-        "genre:18" to if (lang == "it") "Dramma" else "Drama",
-        "genre:10751" to if (lang == "it") "Famiglia" else "Family",
-        "genre:878" to if (lang == "it") "Fantascienza" else "Science Fiction",
-        "genre:14" to if (lang == "it") "Fantasy" else "Fantasy",
-        "genre:27" to if (lang == "it") "Horror" else "Horror",
-        "genre:10749" to if (lang == "it") "Romance" else "Romance",
-        "genre:53" to if (lang == "it") "Thriller" else "Thriller"
-    )
-
-    override val mainPage = mainPageOf(
-        *listOf("home" to "Home", *fallbackGenreSections.toTypedArray()).toTypedArray()
-    )
+    override val mainPage = mainPageOf("home" to "Home")
 
     private fun isHtmlPayload(payload: String): Boolean {
         val trimmed = payload.trimStart()
@@ -142,6 +123,29 @@ class StreamingCommunity(
             }.orEmpty()
     }
 
+    private fun parseSliderFetchSections(payload: String): List<HomePageList> {
+        if (payload.isBlank()) return emptyList()
+        if (isHtmlPayload(payload)) {
+            Log.e(TAG, "Sliders fetch: expected JSON array but received HTML payload")
+            return emptyList()
+        }
+
+        val sliders = runCatching { parseJson<List<Slider>>(payload) }
+            .onFailure { Log.e(TAG, "Sliders fetch: invalid JSON payload - ${it.message}") }
+            .getOrNull()
+            ?: return emptyList()
+
+        return sliders.mapNotNull { slider ->
+            val items = searchResponseBuilder(slider.titles)
+            if (items.isEmpty()) return@mapNotNull null
+            HomePageList(
+                name = slider.label.ifBlank { slider.name },
+                list = items,
+                isHorizontalImages = false
+            )
+        }
+    }
+
     private suspend fun setupHeaders() {
         val response = app.get("$mainUrl/archive")
         val cookies = response.cookies
@@ -174,33 +178,32 @@ class StreamingCommunity(
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        if (request.data == "home") {
-            if (page > 1) return newHomePageResponse(emptyList(), hasNext = false)
-            val responseBody = app.get(Companion.mainUrl).body.string()
-            return newHomePageResponse(parseHomeSections(responseBody), hasNext = false)
+        return when (page) {
+            1 -> {
+                val responseBody = app.get(Companion.mainUrl).body.string()
+                newHomePageResponse(parseHomeSections(responseBody), hasNext = true)
+            }
+
+            2 -> {
+                if (headers["Cookie"].isNullOrEmpty()) {
+                    setupHeaders()
+                }
+
+                val responseBody = app.get(
+                    "${Companion.mainUrl}api/sliders/fetch",
+                    params = mapOf("lang" to lang),
+                    headers = headers
+                ).body.string()
+
+                val sections = parseSliderFetchSections(responseBody)
+                if (sections.isEmpty()) {
+                    Log.w(TAG, "Lazy slider fetch returned no sections")
+                }
+                newHomePageResponse(sections, hasNext = false)
+            }
+
+            else -> newHomePageResponse(emptyList(), hasNext = false)
         }
-
-        val genreId = request.data.substringAfter("genre:", "").toIntOrNull()
-        if (genreId == null) {
-            Log.e(TAG, "Main page request '${request.data}' is not supported")
-            return newHomePageResponse(emptyList(), hasNext = false)
-        }
-
-        val params = mutableMapOf(
-            "genre[]" to genreId.toString(),
-            "locale" to lang
-        )
-        if (page > 1) params["page"] = page.toString()
-
-        val archiveBody = app.get("${Companion.mainUrl}archive", params = params).body.string()
-        val titles = parseBrowseTitles(archiveBody, "Archive genre=$genreId")
-        val list = searchResponseBuilder(titles)
-        val hasNext = list.isNotEmpty() && list.size >= 60
-
-        return newHomePageResponse(
-            HomePageList(request.name, list, false),
-            hasNext = hasNext
-        )
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
