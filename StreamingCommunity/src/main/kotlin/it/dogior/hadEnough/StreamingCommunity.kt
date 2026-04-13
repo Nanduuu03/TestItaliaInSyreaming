@@ -84,6 +84,7 @@ class StreamingCommunity(
     override val mainPage = mainPageOf(
         *listOf("home" to "Home", *fallbackGenreSections.toTypedArray()).toTypedArray()
     )
+    override val mainPage = mainPageOf("${Companion.mainUrl}" to "Home")
 
     private fun isHtmlPayload(payload: String): Boolean {
         val trimmed = payload.trimStart()
@@ -201,12 +202,31 @@ class StreamingCommunity(
             HomePageList(request.name, list, false),
             hasNext = hasNext
         )
+        if (page > 1) return newHomePageResponse(emptyList(), hasNext = false)
+
+        val responseBody = app.get(Companion.mainUrl).body.string()
+        val inertiaJson = extractInertiaPageJson(responseBody)
+        val inertiaResponse = inertiaJson?.let { parseInertiaPayload(it, "Homepage") }
+        val sections = inertiaResponse?.props?.sliders
+            ?.mapNotNull { slider ->
+                val items = searchResponseBuilder(slider.titles)
+                if (items.isEmpty()) return@mapNotNull null
+                HomePageList(
+                    name = slider.label.ifBlank { slider.name },
+                    list = items,
+                    isHorizontalImages = false
+                )
+            } ?: emptyList()
+
+        return newHomePageResponse(sections, hasNext = false)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/search"
         val response = app.get(url, params = mapOf("q" to query)).body.string()
         val titles = parseBrowseTitles(response, "Search")
+        val result = parseInertiaPayload(response, "Search")
+        val titles = result?.props?.titles ?: emptyList()
         return searchResponseBuilder(titles)
     }
 
@@ -218,6 +238,9 @@ class StreamingCommunity(
         val items = searchResponseBuilder(titles)
         val hasNext = items.isNotEmpty() && items.size >= 60
         return newSearchResponseList(items, hasNext = hasNext)
+        if (page > 1) return newSearchResponseList(emptyList(), hasNext = false)
+        val items = search(query)
+        return newSearchResponseList(items, hasNext = false)
     }
 
     private suspend fun getPoster(title: TitleProp): String? {
