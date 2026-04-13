@@ -178,32 +178,28 @@ class StreamingCommunity(
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        return when (page) {
-            1 -> {
-                val responseBody = app.get(Companion.mainUrl).body.string()
-                newHomePageResponse(parseHomeSections(responseBody), hasNext = true)
-            }
-
-            2 -> {
-                if (headers["Cookie"].isNullOrEmpty()) {
-                    setupHeaders()
-                }
-
-                val responseBody = app.get(
-                    "${Companion.mainUrl}api/sliders/fetch",
-                    params = mapOf("lang" to lang),
-                    headers = headers
-                ).body.string()
-
-                val sections = parseSliderFetchSections(responseBody)
-                if (sections.isEmpty()) {
-                    Log.w(TAG, "Lazy slider fetch returned no sections")
-                }
-                newHomePageResponse(sections, hasNext = false)
-            }
-
-            else -> newHomePageResponse(emptyList(), hasNext = false)
+        if (page > 1) {
+            return newHomePageResponse(emptyList(), hasNext = false)
         }
+
+        val homePayload = app.get(Companion.mainUrl).body.string()
+        val homepageSections = parseHomeSections(homePayload)
+
+        if (headers["Cookie"].isNullOrEmpty()) {
+            setupHeaders()
+        }
+
+        val lazyPayload = app.get(
+            "${Companion.mainUrl}api/sliders/fetch",
+            params = mapOf("lang" to lang),
+            headers = headers
+        ).body.string()
+        val lazySections = parseSliderFetchSections(lazyPayload)
+        if (lazySections.isEmpty()) {
+            Log.w(TAG, "Lazy slider fetch returned no sections")
+        }
+
+        return newHomePageResponse(homepageSections + lazySections, hasNext = false)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
