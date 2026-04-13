@@ -64,7 +64,26 @@ class StreamingCommunity(
         "Accept" to "application/json"
     )
 
-    override val mainPage = mainPageOf("${Companion.mainUrl}" to "Home")
+    // TODO: verify genre IDs against live backend payload and replace fallback IDs if needed.
+    private val fallbackGenreSections = listOf(
+        "genre:28" to if (lang == "it") "Azione" else "Action",
+        "genre:12" to if (lang == "it") "Avventura" else "Adventure",
+        "genre:16" to if (lang == "it") "Animazione" else "Animation",
+        "genre:35" to if (lang == "it") "Commedia" else "Comedy",
+        "genre:80" to if (lang == "it") "Crime" else "Crime",
+        "genre:99" to if (lang == "it") "Documentario" else "Documentary",
+        "genre:18" to if (lang == "it") "Dramma" else "Drama",
+        "genre:10751" to if (lang == "it") "Famiglia" else "Family",
+        "genre:878" to if (lang == "it") "Fantascienza" else "Science Fiction",
+        "genre:14" to if (lang == "it") "Fantasy" else "Fantasy",
+        "genre:27" to if (lang == "it") "Horror" else "Horror",
+        "genre:10749" to if (lang == "it") "Romance" else "Romance",
+        "genre:53" to if (lang == "it") "Thriller" else "Thriller"
+    )
+
+    override val mainPage = mainPageOf(
+        *listOf("home" to "Home", *fallbackGenreSections.toTypedArray()).toTypedArray()
+    )
 
     private fun isHtmlPayload(payload: String): Boolean {
         val trimmed = payload.trimStart()
@@ -89,6 +108,38 @@ class StreamingCommunity(
         return runCatching { parseJson<InertiaResponse>(payload) }
             .onFailure { Log.e(TAG, "$logContext: invalid JSON payload - ${it.message}") }
             .getOrNull()
+    }
+
+    private fun parseBrowseTitles(payload: String, logContext: String): List<Title> {
+        val jsonPayload = if (isHtmlPayload(payload)) {
+            Log.e(TAG, "$logContext: received HTML payload, attempting embedded data-page fallback")
+            extractInertiaPageJson(payload) ?: return emptyList()
+        } else {
+            payload
+        }
+
+        val result = parseInertiaPayload(jsonPayload, logContext) ?: return emptyList()
+        return result.props.titles ?: emptyList()
+    }
+
+    private fun parseHomeSections(payload: String): List<HomePageList> {
+        val jsonPayload = if (isHtmlPayload(payload)) {
+            extractInertiaPageJson(payload)
+        } else {
+            payload
+        } ?: return emptyList()
+
+        val result = parseInertiaPayload(jsonPayload, "Homepage") ?: return emptyList()
+        return result.props.sliders
+            ?.mapNotNull { slider ->
+                val items = searchResponseBuilder(slider.titles)
+                if (items.isEmpty()) return@mapNotNull null
+                HomePageList(
+                    name = slider.label.ifBlank { slider.name },
+                    list = items,
+                    isHorizontalImages = false
+                )
+            }.orEmpty()
     }
 
     private suspend fun setupHeaders() {
@@ -123,37 +174,50 @@ class StreamingCommunity(
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        if (page > 1) return newHomePageResponse(emptyList(), hasNext = false)
+        if (request.data == "home") {
+            if (page > 1) return newHomePageResponse(emptyList(), hasNext = false)
+            val responseBody = app.get(Companion.mainUrl).body.string()
+            return newHomePageResponse(parseHomeSections(responseBody), hasNext = false)
+        }
 
-        val responseBody = app.get(Companion.mainUrl).body.string()
-        val inertiaJson = extractInertiaPageJson(responseBody)
-        val inertiaResponse = inertiaJson?.let { parseInertiaPayload(it, "Homepage") }
-        val sections = inertiaResponse?.props?.sliders
-            ?.mapNotNull { slider ->
-                val items = searchResponseBuilder(slider.titles)
-                if (items.isEmpty()) return@mapNotNull null
-                HomePageList(
-                    name = slider.label.ifBlank { slider.name },
-                    list = items,
-                    isHorizontalImages = false
-                )
-            } ?: emptyList()
+        val genreId = request.data.substringAfter("genre:", "").toIntOrNull()
+        if (genreId == null) {
+            Log.e(TAG, "Main page request '${request.data}' is not supported")
+            return newHomePageResponse(emptyList(), hasNext = false)
+        }
 
-        return newHomePageResponse(sections, hasNext = false)
+        val params = mutableMapOf(
+            "genre[]" to genreId.toString(),
+            "locale" to lang
+        )
+        if (page > 1) params["page"] = page.toString()
+
+        val archiveBody = app.get("${Companion.mainUrl}archive", params = params).body.string()
+        val titles = parseBrowseTitles(archiveBody, "Archive genre=$genreId")
+        val list = searchResponseBuilder(titles)
+        val hasNext = list.isNotEmpty() && list.size >= 60
+
+        return newHomePageResponse(
+            HomePageList(request.name, list, false),
+            hasNext = hasNext
+        )
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/search"
         val response = app.get(url, params = mapOf("q" to query)).body.string()
-        val result = parseInertiaPayload(response, "Search")
-        val titles = result?.props?.titles ?: emptyList()
+        val titles = parseBrowseTitles(response, "Search")
         return searchResponseBuilder(titles)
     }
 
     override suspend fun search(query: String, page: Int): SearchResponseList {
-        if (page > 1) return newSearchResponseList(emptyList(), hasNext = false)
-        val items = search(query)
-        return newSearchResponseList(items, hasNext = false)
+        val params = mutableMapOf("q" to query)
+        if (page > 1) params["page"] = page.toString()
+        val response = app.get("$mainUrl/search", params = params).body.string()
+        val titles = parseBrowseTitles(response, "Search page=$page")
+        val items = searchResponseBuilder(titles)
+        val hasNext = items.isNotEmpty() && items.size >= 60
+        return newSearchResponseList(items, hasNext = hasNext)
     }
 
     private suspend fun getPoster(title: TitleProp): String? {
