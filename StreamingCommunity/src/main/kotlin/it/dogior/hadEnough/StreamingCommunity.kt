@@ -30,7 +30,9 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import org.json.JSONArray
 import org.json.JSONObject
+import org.jsoup.parser.Parser
 
 class StreamingCommunity(
     override var lang: String = "it",
@@ -63,48 +65,217 @@ class StreamingCommunity(
         "Accept" to "application/json"
     )
 
-    private val sectionNamesListIT = mainPageOf(
-        "$mainUrl/browse/top10" to "Top 10 di oggi",
-        "$mainUrl/browse/trending" to "I Titoli Del Momento",
-        "$mainUrl/browse/latest" to "Aggiunti di Recente",
-        "$mainUrl/browse/upcoming" to "In arrivo...",
-        "$mainUrl/browse/genre?g=Animation" to "Animazione",
-        "$mainUrl/browse/genre?g=Adventure" to "Avventura",
-        "$mainUrl/browse/genre?g=Action" to "Azione",
-        "$mainUrl/browse/genre?g=Comedy" to "Commedia",
-        "$mainUrl/browse/genre?g=Crime" to "Crime",
-        "$mainUrl/browse/genre?g=Documentary" to "Documentario",
-        "$mainUrl/browse/genre?g=Drama" to "Dramma",
-        "$mainUrl/browse/genre?g=Family" to "Famiglia",
-        "$mainUrl/browse/genre?g=Science Fiction" to "Fantascienza",
-        "$mainUrl/browse/genre?g=Fantasy" to "Fantasy",
-        "$mainUrl/browse/genre?g=Horror" to "Horror",
-        "$mainUrl/browse/genre?g=Reality" to "Reality",
-        "$mainUrl/browse/genre?g=Romance" to "Romance",
-        "$mainUrl/browse/genre?g=Thriller" to "Thriller",
+    private val fallbackGenreNameToId = linkedMapOf(
+        "action" to 28,
+        "adventure" to 12,
+        "animation" to 16,
+        "comedy" to 35,
+        "crime" to 80,
+        "documentary" to 99,
+        "drama" to 18,
+        "family" to 10751,
+        "science fiction" to 878,
+        "fantasy" to 14,
+        "horror" to 27,
+        "romance" to 10749,
+        "thriller" to 53
     )
-    private val sectionNamesListEN = mainPageOf(
-        "$mainUrl/browse/top10" to "Top 10 of Today",
-        "$mainUrl/browse/trending" to "Trending Titles",
-        "$mainUrl/browse/latest" to "Recently Added",
-        "$mainUrl/browse/upcoming" to "Upcoming...",
-        "$mainUrl/browse/genre?g=Animation" to "Animation",
-        "$mainUrl/browse/genre?g=Adventure" to "Adventure",
-        "$mainUrl/browse/genre?g=Action" to "Action",
-        "$mainUrl/browse/genre?g=Comedy" to "Comedy",
-        "$mainUrl/browse/genre?g=Crime" to "Crime",
-        "$mainUrl/browse/genre?g=Documentary" to "Documentary",
-        "$mainUrl/browse/genre?g=Drama" to "Drama",
-        "$mainUrl/browse/genre?g=Family" to "Family",
-        "$mainUrl/browse/genre?g=Science Fiction" to "Science Fiction",
-        "$mainUrl/browse/genre?g=Fantasy" to "Fantasy",
-        "$mainUrl/browse/genre?g=Horror" to "Horror",
-        "$mainUrl/browse/genre?g=Reality" to "Reality",
-        "$mainUrl/browse/genre?g=Romance" to "Romance",
-        "$mainUrl/browse/genre?g=Thriller" to "Thriller",
+
+    private val preferredGenres = listOf(
+        "Action" to listOf("action", "azione"),
+        "Adventure" to listOf("adventure", "avventura"),
+        "Animation" to listOf("animation", "animazione"),
+        "Comedy" to listOf("comedy", "commedia"),
+        "Crime" to listOf("crime"),
+        "Documentary" to listOf("documentary", "documentario"),
+        "Drama" to listOf("drama", "dramma"),
+        "Family" to listOf("family", "famiglia"),
+        "Science Fiction" to listOf("science fiction", "fantascienza"),
+        "Fantasy" to listOf("fantasy"),
+        "Horror" to listOf("horror"),
+        "Romance" to listOf("romance", "romantico"),
+        "Thriller" to listOf("thriller")
     )
-    private val sections = if (lang == "it") sectionNamesListIT else sectionNamesListEN
-    override val mainPage = sections
+
+    private var cachedGenreNameToId: Map<String, Int>? = null
+    private var genreMappingSource = "none"
+
+    override val mainPage = mainPageOf("home" to "Home")
+
+    private fun isHtmlPayload(payload: String): Boolean {
+        val trimmed = payload.trimStart()
+        return trimmed.startsWith("<") || trimmed.contains("<!DOCTYPE", ignoreCase = true)
+    }
+
+    private fun extractInertiaPageJson(html: String): String? {
+        val dataPageRaw = org.jsoup.Jsoup.parse(html).selectFirst("#app")?.attr("data-page")
+        if (dataPageRaw.isNullOrBlank()) return null
+        return Parser.unescapeEntities(dataPageRaw, true)
+    }
+
+    private fun parseInertiaPayload(payload: String, logContext: String): InertiaResponse? {
+        if (payload.isBlank()) {
+            Log.e(TAG, "$logContext: empty payload")
+            return null
+        }
+        if (isHtmlPayload(payload)) {
+            Log.e(TAG, "$logContext: expected JSON but received HTML payload")
+            return null
+        }
+        return runCatching { parseJson<InertiaResponse>(payload) }
+            .onFailure { Log.e(TAG, "$logContext: invalid JSON payload - ${it.message}") }
+            .getOrNull()
+    }
+
+    private fun parseBrowseTitles(payload: String, logContext: String): List<Title> {
+        val jsonPayload = if (isHtmlPayload(payload)) {
+            Log.e(TAG, "$logContext: received HTML payload, attempting embedded data-page fallback")
+            extractInertiaPageJson(payload) ?: return emptyList()
+        } else {
+            payload
+        }
+
+        val result = parseInertiaPayload(jsonPayload, logContext) ?: return emptyList()
+        return result.props.titles ?: emptyList()
+    }
+
+    private fun parsePayloadToJson(payload: String, logContext: String): String? {
+        return if (isHtmlPayload(payload)) {
+            Log.e(TAG, "$logContext: received HTML payload, attempting embedded data-page fallback")
+            extractInertiaPageJson(payload)
+        } else {
+            payload
+        }
+    }
+
+    private fun parseHomeSections(payload: String): List<HomePageList> {
+        val jsonPayload = parsePayloadToJson(payload, "Homepage") ?: return emptyList()
+
+        val result = parseInertiaPayload(jsonPayload, "Homepage") ?: return emptyList()
+        return result.props.sliders
+            ?.mapNotNull { slider ->
+                val items = searchResponseBuilder(slider.titles)
+                if (items.isEmpty()) return@mapNotNull null
+                HomePageList(
+                    name = slider.label.ifBlank { slider.name },
+                    list = items,
+                    isHorizontalImages = false
+                )
+            }.orEmpty()
+    }
+
+    private fun normalizeGenreName(value: String): String =
+        value.lowercase().replace(Regex("\\s+"), " ").trim()
+
+    private fun extractGenreNameToId(payload: String, logContext: String): Map<String, Int> {
+        val jsonPayload = parsePayloadToJson(payload, logContext) ?: return emptyMap()
+        val mapping = linkedMapOf<String, Int>()
+
+        parseInertiaPayload(jsonPayload, "$logContext Inertia")
+            ?.props
+            ?.genres
+            ?.forEach { genre ->
+                if (genre.name.isNotBlank()) {
+                    mapping[normalizeGenreName(genre.name)] = genre.id
+                }
+            }
+
+        runCatching { JSONObject(jsonPayload) }
+            .onSuccess { root ->
+                fun walk(value: Any?) {
+                    when (value) {
+                        is JSONObject -> {
+                            val id = value.optInt("id", -1)
+                            val name = value.optString("name", "").trim()
+                            if (id > 0 && name.isNotBlank()) {
+                                mapping.putIfAbsent(normalizeGenreName(name), id)
+                            }
+                            val keys = value.keys()
+                            while (keys.hasNext()) {
+                                walk(value.opt(keys.next()))
+                            }
+                        }
+
+                        is JSONArray -> {
+                            for (i in 0 until value.length()) {
+                                walk(value.opt(i))
+                            }
+                        }
+                    }
+                }
+
+                walk(root)
+            }
+            .onFailure { Log.e(TAG, "$logContext: failed JSON object walk - ${it.message}") }
+
+        return mapping
+    }
+
+    private suspend fun getGenreNameToId(): Map<String, Int> {
+        cachedGenreNameToId?.let { return it }
+
+        val homepagePayload = app.get(Companion.mainUrl).body.string()
+        var mapping = extractGenreNameToId(homepagePayload, "Genre discovery homepage")
+        genreMappingSource = "homepage"
+
+        if (mapping.isEmpty()) {
+            val archivePayload = app.get(
+                "${Companion.mainUrl}archive",
+                params = mapOf("locale" to lang)
+            ).body.string()
+            mapping = extractGenreNameToId(archivePayload, "Genre discovery archive")
+            genreMappingSource = "archive"
+        }
+
+        if (mapping.isEmpty()) {
+            mapping = fallbackGenreNameToId
+            genreMappingSource = "fallback"
+        }
+
+        Log.d(TAG, "Genre map source=$genreMappingSource size=${mapping.size}")
+        cachedGenreNameToId = mapping
+        return mapping
+    }
+
+    private suspend fun loadArchiveSection(genreId: Int, sectionName: String, page: Int = 1): HomePageList? {
+        val params = mutableMapOf(
+            "genre[]" to genreId.toString(),
+            "locale" to lang
+        )
+        if (page > 1) params["page"] = page.toString()
+
+        val archiveBody = app.get("${Companion.mainUrl}archive", params = params).body.string()
+        val titles = parseBrowseTitles(archiveBody, "Archive genre=$genreId")
+        val list = searchResponseBuilder(titles)
+        if (list.isEmpty()) return null
+
+        return HomePageList(sectionName, list, false)
+    }
+
+    private suspend fun buildGenreSections(page: Int): List<HomePageList> {
+        if (page > 1) return emptyList()
+        val dynamicMap = getGenreNameToId()
+
+        val result = mutableListOf<HomePageList>()
+        preferredGenres.forEach { (canonicalName, aliases) ->
+            val genreId = aliases
+                .asSequence()
+                .map { normalizeGenreName(it) }
+                .mapNotNull { dynamicMap[it] }
+                .firstOrNull()
+                ?: return@forEach
+
+            val sectionLabel = if (lang == "it") {
+                aliases.lastOrNull()?.capitalize() ?: canonicalName
+            } else {
+                canonicalName
+            }
+
+            loadArchiveSection(genreId, sectionLabel, page)?.let { result.add(it) }
+        }
+
+        return result
+    }
 
     private suspend fun setupHeaders() {
         val response = app.get("$mainUrl/archive")
@@ -138,67 +309,44 @@ class StreamingCommunity(
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        var url = mainUrl.substringBeforeLast("/") + "/api" +
-                request.data.substringAfter(mainUrl)
-        val params = mutableMapOf("lang" to lang)
-
-        val section = request.data.substringAfterLast("/")
-        when (section) {
-            "trending" -> {}
-            "latest" -> {}
-            "top10" -> {}
-            else -> {
-                val genere = url.substringAfterLast('=')
-                url = url.substringBeforeLast('?')
-                params["g"] = genere
-            }
+        if (request.data == "home") {
+            if (page > 1) return newHomePageResponse(emptyList(), hasNext = false)
+            val responseBody = app.get(Companion.mainUrl).body.string()
+            val homepageSections = parseHomeSections(responseBody)
+            val genreSections = buildGenreSections(page)
+            return newHomePageResponse(homepageSections + genreSections, hasNext = false)
         }
 
-        if (page > 0) {
-            params["offset"] = ((page - 1) * 60).toString()
+        val genreId = request.data.substringAfter("genre:", "").toIntOrNull()
+        if (genreId == null) {
+            Log.e(TAG, "Main page request '${request.data}' is not supported")
+            return newHomePageResponse(emptyList(), hasNext = false)
         }
-        val response = app.get(url, params = params)
-        val responseString = response.body.string()
-        val responseJson = parseJson<Section>(responseString)
 
-        val titlesList = searchResponseBuilder(responseJson.titles)
-
-        val hasNextPage =
-            response.okhttpResponse.request.url.queryParameter("offset")?.toIntOrNull()
-                ?.let { it < 120 } ?: true && titlesList.size == 60
+        val section = loadArchiveSection(genreId, request.name, page)
+        val hasNext = false
 
         return newHomePageResponse(
-            HomePageList(
-                name = request.name,
-                list = titlesList,
-                isHorizontalImages = false
-            ), hasNextPage
+            section ?: HomePageList(request.name, emptyList(), false),
+            hasNext = hasNext
         )
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/search"
-        val params = mapOf("q" to query)
-
-        if (headers["Cookie"].isNullOrEmpty()) {
-            setupHeaders()
-        }
-        val response = app.get(url, params = params, headers = headers).body.string()
-        val result = parseJson<InertiaResponse>(response)
-
-        return searchResponseBuilder(result.props.titles!!)
+        val response = app.get(url, params = mapOf("q" to query)).body.string()
+        val titles = parseBrowseTitles(response, "Search")
+        return searchResponseBuilder(titles)
     }
 
     override suspend fun search(query: String, page: Int): SearchResponseList {
-        val searchUrl = "${mainUrl.replace("/it", "")}/api/search"
-        val params = mutableMapOf("q" to query, "lang" to lang)
-        if (page > 0) {
-            params["offset"] = ((page - 1) * 60).toString()
-        }
-        val response = app.get(searchUrl, params = params, headers = headers).body.string()
-        val result = parseJson<it.dogior.hadEnough.SearchResponse>(response)
-        val hasNext = (page < 3) || (page < result.lastPage)
-        return newSearchResponseList(searchResponseBuilder(result.data), hasNext = hasNext)
+        val params = mutableMapOf("q" to query)
+        if (page > 1) params["page"] = page.toString()
+        val response = app.get("$mainUrl/search", params = params).body.string()
+        val titles = parseBrowseTitles(response, "Search page=$page")
+        val items = searchResponseBuilder(titles)
+        val hasNext = items.isNotEmpty() && items.size >= 60
+        return newSearchResponseList(items, hasNext = hasNext)
     }
 
     private suspend fun getPoster(title: TitleProp): String? {
