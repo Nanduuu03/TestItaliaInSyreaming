@@ -125,6 +125,14 @@ class StreamingCommunity(
 
     private fun parseSliderFetchSections(payload: String): List<HomePageList> {
         if (payload.isBlank()) return emptyList()
+        val trimmedPayload = payload.trimStart()
+        if (trimmedPayload.startsWith("{") || trimmedPayload.contains("\"message\"")) {
+            Log.e(
+                TAG,
+                "Sliders fetch: received error object instead of slider array: ${payload.take(300)}"
+            )
+            return emptyList()
+        }
         if (isHtmlPayload(payload)) {
             Log.e(TAG, "Sliders fetch: expected JSON array but received HTML payload")
             return emptyList()
@@ -199,9 +207,9 @@ class StreamingCommunity(
             setupHeaders()
         }
 
-        val lazyResponse = app.get(
+        val lazyResponse = app.post(
             "${Companion.mainUrl}api/sliders/fetch",
-            params = mapOf("lang" to lang),
+            data = mapOf("lang" to lang),
             headers = getSliderFetchHeaders()
         )
         val lazyPayload = lazyResponse.body.string()
