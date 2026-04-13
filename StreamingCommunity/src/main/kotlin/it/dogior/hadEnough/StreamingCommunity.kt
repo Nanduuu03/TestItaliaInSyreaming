@@ -206,12 +206,11 @@ class StreamingCommunity(
         )
         val lazyPayload = lazyResponse.body.string()
         Log.d(TAG, "Slider fetch status=${lazyResponse.code}")
-        Log.d(TAG, "Slider fetch contentType=${lazyResponse.headers[\"Content-Type\"]}")
         Log.d(TAG, "Slider fetch preview=${lazyPayload.take(500)}")
 
         val lazySections = parseSliderFetchSections(lazyPayload)
         if (lazySections.isEmpty()) {
-            Log.w(TAG, "Lazy slider fetch returned no sections")
+            Log.d(TAG, "Lazy slider fetch returned no sections")
         }
 
         return newHomePageResponse(homepageSections + lazySections, hasNext = false)
